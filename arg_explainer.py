@@ -23,7 +23,8 @@ class ArgTabularExplainer(object):
         self.t_X = self.X.transpose().toarray()
         self.naive_extensions = None
         ## Current strategy:
-        self.extension_strategy = 'naive'
+        self.strategy = None
+        self.extension_strategy = None
         self.covi_by_extension = None
         self.covc_by_extension = None
 
@@ -114,6 +115,7 @@ class ArgTabularExplainer(object):
             print(potential_args_checked_count, ' potential arg checked.')
             return args, minimals
 
+        print('Generating arguments')
         n = 0
         minimals = None
         while not minimals or len(minimals[0][-1]) != 0 or len(minimals[1][-1]) != 0:
@@ -159,9 +161,9 @@ class ArgTabularExplainer(object):
         G = nx.Graph()
         G.add_edges_from(R_atk)
         #G = nx.petersen_graph()
-        nx.draw(G, with_labels=True, font_weight='bold')
-        nx.drawing.nx_pydot.write_dot(G, "R_atk_fig.dot")
-        plt.savefig("R_atk_fig.png")
+        nx.draw(G, with_labels=False)
+        nx.drawing.nx_pydot.write_dot(G,path.join(self.output_path, self.exp_name + "R_atk_fig.dot"))
+        plt.savefig(path.join(self.output_path, self.exp_name  +"R_atk_fig.png"))
         return G
 
     def build_attack_graph(self):
@@ -200,44 +202,55 @@ class ArgTabularExplainer(object):
             naive_extensions[h2].discard(h1)
         self.naive_extensions = naive_extensions
 
-    def strategy(self, strategy='max_covi'):
-        # TODO: implement strategy
+    def set_strategy(self, strategy='max_covi'):
+        # TODO: implement strategies
         """
         Returns the extension to be used for explanations.
         """
-        if strategy == 'max_covi':
-            covi_by_ext = dict()
-            covc_by_ext = dict()
-            max_covi = {}
-            max_covi_ext = {}
-
+        
+        def find_max_cov_ext(cov_by_arg):
+            cov_by_ext = dict()
+            max_cov = set()
             for ext in self.naive_extensions.values():
-                covi = set.union(*[self.covi_by_arg[arg] for arg in ext])
-                covi_by_ext.update({frozenset(ext): covi})
-                if len(covi) > len(max_covi):
-                    max_covi_ext = ext
-                    max_covi = covi
-                covc = set.union(*[self.covc_by_arg[arg] for arg in ext])
-                covc_by_ext.update({frozenset(ext): covc})
-
-            print(len(covi_by_ext[frozenset(max_covi_ext)]), "/", len(self.X))
-
-            sorted_covs = [len(cov) for cov in covi_by_ext.values()]
-            sorted_covs.sort()
-            self.covi_by_extension = covi_by_ext
-            self.covc_by_extension = covc_by_ext
-            self.extension_strategy = max_covi_ext
+                cov = set.union(*[cov_by_arg[arg] for arg in ext])
+                cov_by_ext.update({frozenset(ext): cov})
+                if len(cov) > len(max_cov):
+                    max_cov_ext = ext
+                    max_cov = cov
+            return max_cov_ext, max_cov, cov_by_ext
+        
+        self.strategy = strategy
+        if strategy == 'max_covi':
+            max_cov_ext, max_cov, self.covi_by_extension = find_max_cov_ext(self.covi_by_arg)
+            print('Covi strategy\'s coverage:', len(self.covi_by_extension[frozenset(max_cov_ext)]))
+            sorted_covs = [len(cov) for cov in self.covi_by_extension.values()]
+        elif strategy == 'max_covc':
+            max_cov_ext, max_cov, self.covc_by_extension = find_max_cov_ext(self.covc_by_arg)
+            print('Covc strategy\'s coverage:', len(self.covc_by_extension[frozenset(max_cov_ext)]))
+            sorted_covs = [len(cov) for cov in self.covc_by_extension.values()]
+        
+        self.extension_strategy = max_cov_ext
+        
+        sorted_covs.sort()
+        print('Top 5 covs:', sorted_covs[-5:])
 
 
     def explain(self, instance, i):
         ext_ = self.extension_strategy
+        if self.strategy == 'max_covi':
+            cov_by_arg = self.covi_by_arg
+        elif self.strategy == 'max_covc':
+            cov_by_arg = self.covc_by_arg
+        cov = set()
+
         expl = set()
         instance_set = set(np.where(instance.toarray() != 0)[1])
         if i in self.covi_by_extension[frozenset(ext_)]:
             for arg in ext_:
                 if arg.issubset(instance_set):
                     expl.add(arg)
-        return expl
+                    cov.update(cov_by_arg[arg])
+        return expl, cov
 
     def parse_features(self, explanation):
         parsed_expl = set()
@@ -245,7 +258,10 @@ class ArgTabularExplainer(object):
             parsed_expl.add(frozenset([self.feature_names[k] for k in arg]))
         return parsed_expl
 
-    def display_explanations(self, slice='all', strategy='max_covi'):
+    def display_explanations(self, slice='all'):
+        if not self.strategy:
+            print('Defaulting to max_covi strategy.')
+            self.set_strategy('max_covi')
         if slice == 'all':
             slice = range(self.X.shape[0])
         else:
@@ -253,8 +269,13 @@ class ArgTabularExplainer(object):
         empty = 0
         tot = 0
         for k in slice:
-            expl = self.parse_features(self.explain(self.X.getrow(k), k, strategy=strategy))
-            print(k, expl)
+            expl, cov = self.explain(self.X[k], k)
+            expl_parsed = self.parse_features(expl)
+            example = next(iter(expl_parsed)) if expl_parsed else None
+            print('id:', k, 'coverage:', len(cov), 'Arg 1/' + str(len(expl_parsed)) + ':', example)
+            tot += 1
+            if len(expl_parsed) == 0:
+                empty += 1
             if not expl:
                 empty += 1
             tot += 1

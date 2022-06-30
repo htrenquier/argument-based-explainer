@@ -1,2 +1,2 @@
-./saves/*
-./__pycache__/*
+saves/
+__pycache__/
