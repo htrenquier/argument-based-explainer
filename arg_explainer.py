@@ -22,6 +22,7 @@ class ArgTabularExplainer(object):
         self.feature_names = self.oh_enc.get_feature_names_out(dataset.columns)
         self.t_X = self.X.transpose().toarray()
         self.naive_extensions = None
+        self.G = None
         ## Current strategy:
         self.strategy = None
         self.extension_strategy = None
@@ -42,9 +43,9 @@ class ArgTabularExplainer(object):
             pd.to_pickle(self.covc_by_arg, path.join(output_path, self.exp_name + '_covcbyarg.df'))
         else: 
             ## Load
-            minimals = pd.read_pickle(path.join(output_path, self.exp_name + '_minimals.df'))
-            covi_by_arg = pd.read_pickle(path.join(output_path, self.exp_name + '_covibyarg.df'))
-            covc_by_arg = pd.read_pickle(path.join(output_path, self.exp_name + '_covcbyarg.df'))
+            self.minimals = pd.read_pickle(path.join(output_path, self.exp_name + '_minimals.df'))
+            self.covi_by_arg = pd.read_pickle(path.join(output_path, self.exp_name + '_covibyarg.df'))
+            self.covc_by_arg = pd.read_pickle(path.join(output_path, self.exp_name + '_covcbyarg.df'))
         
         self.arguments = self.read_args(self.minimals, self.feature_names)
         
@@ -151,31 +152,35 @@ class ArgTabularExplainer(object):
         print(self.exp_name)
         pp = path.join(self.output_path, self.exp_name + '_R_atk.df')
         pd.to_pickle(R_atk, pp)
+        return R_atk
+        
 
-
-    def evaluate_r_atk(self, minimals):
-        self.build_r_atk(minimals)
-        R_atk = pd.read_pickle(path.join(self.output_path, self.exp_name + '_R_atk.df'))
-        print('len', len(R_atk))
-
-        G = nx.Graph()
-        G.add_edges_from(R_atk)
-        #G = nx.petersen_graph()
-        nx.draw(G, with_labels=False)
-        nx.drawing.nx_pydot.write_dot(G,path.join(self.output_path, self.exp_name + "R_atk_fig.dot"))
-        plt.savefig(path.join(self.output_path, self.exp_name  +"R_atk_fig.png"))
-        return G
-
-    def build_attack_graph(self):
+    def build_attack_graph(self, compute=False, display_graph=False):
         """
         """
         # Building Attack graph
-        G = self.evaluate_r_atk(self.minimals)
+        if compute:
+            R_atk = self.build_r_atk(self.minimals)
+        else:
+            R_atk = pd.read_pickle(path.join(self.output_path, self.exp_name + '_R_atk.df'))
+        print('len(R_atk) = ', len(R_atk))
 
-        degs = np.array(list(G.degree()), dtype = [('node', 'object'), ('degree', int)])
+        self.G = nx.Graph()
+        self.G.add_edges_from(R_atk)
+        nx.draw(self.G, with_labels=False)
+        
+        if display_graph:
+            nx.drawing.nx_pydot.write_dot(self.G,path.join(self.output_path, self.exp_name + "R_atk_fig.dot"))
+            plt.savefig(path.join(self.output_path, self.exp_name  +"R_atk_fig.png"))
+        
+        # Compute naive extensions (or maximal anti-cliques: ac)
+        self.naive_extensions = nx.find_cliques(nx.complement(self.G))
+        print(next(iter(self.naive_extensions)))
+        
+        degs = np.array(list(self.G.degree()), dtype = [('node', 'object'), ('degree', int)])
         degrees = np.sort(degs, order='degree')
-        print(degrees[-20:])
-
+        print('5 highest degrees:', degrees[-5:])
+    
     def build_naive_extensions(self):
         """
         """
@@ -211,10 +216,10 @@ class ArgTabularExplainer(object):
         def find_max_cov_ext(cov_by_arg):
             cov_by_ext = dict()
             max_cov = set()
-            for ext in self.naive_extensions.values():
+            for ext in self.naive_extensions:
                 cov = set.union(*[cov_by_arg[arg] for arg in ext])
                 cov_by_ext.update({frozenset(ext): cov})
-                if len(cov) > len(max_cov):
+                if len(cov) >= len(max_cov):
                     max_cov_ext = ext
                     max_cov = cov
             return max_cov_ext, max_cov, cov_by_ext
@@ -235,7 +240,7 @@ class ArgTabularExplainer(object):
         print('Top 5 covs:', sorted_covs[-5:])
 
 
-    def explain(self, instance, i):
+    def explain(self, i):
         ext_ = self.extension_strategy
         if self.strategy == 'max_covi':
             cov_by_arg = self.covi_by_arg
@@ -244,7 +249,7 @@ class ArgTabularExplainer(object):
         cov = set()
 
         expl = set()
-        instance_set = set(np.where(instance.toarray() != 0)[1])
+        instance_set = set(np.where(self.X[i].toarray() != 0)[1])
         if i in self.covi_by_extension[frozenset(ext_)]:
             for arg in ext_:
                 if arg.issubset(instance_set):
@@ -269,7 +274,7 @@ class ArgTabularExplainer(object):
         empty = 0
         tot = 0
         for k in slice:
-            expl, cov = self.explain(self.X[k], k)
+            expl, cov = self.explain(k)
             expl_parsed = self.parse_features(expl)
             example = next(iter(expl_parsed)) if expl_parsed else None
             print('id:', k, 'coverage:', len(cov), 'Arg 1/' + str(len(expl_parsed)) + ':', example)
@@ -281,3 +286,8 @@ class ArgTabularExplainer(object):
             tot += 1
 
         print(empty, tot)
+        
+    def explain_instance(k):
+        expl, cov = self.explain(k)
+        expl_parsed = self.parse_features(expl)
+        print('id:', k, 'coverage:', len(cov), 'Args' + str(len(expl_parsed)) + '/' + str(len(expl_parsed)) + ':', expl_parsed)
