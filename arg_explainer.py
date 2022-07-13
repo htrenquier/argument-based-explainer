@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import OneHotEncoder
 from itertools import combinations
-import copy
+import time
 
 class ArgTabularExplainer(object):
     """
@@ -27,6 +27,8 @@ class ArgTabularExplainer(object):
         self.strategy = {'selection' : None,
                          'inference': None,
                          'explanation_set': None,
+                         'covi' : None,
+                         'covc' : None,
                          'temp_cov': None}
         self.covi_by_extension = None
         self.covc_by_extension = None
@@ -213,6 +215,7 @@ class ArgTabularExplainer(object):
 
                 # Compute naive extensions (or maximal anti-cliques: ac)
         print(nx.density(self.G))
+        print('Number of extensions:', nx.graph_number_of_cliques(nx.complement(self.G)))
         return nx.find_cliques(nx.complement(self.G))
         """
         all_args = set()
@@ -252,13 +255,17 @@ class ArgTabularExplainer(object):
         ne = self.build_naive_extensions()
         assert ne
         nb_ne = 0
-         
+        
+        t_ne = 0
+        t0  = time.time()
+        t1 = time.time()
         for _ext in ne:
+            t_ne += time.time() - t1
             nb_ne += 1
             ext = set(_ext)
             covi = set.union(*[self.covi_by_arg[arg] for arg in ext])
-            self.covi_by_extension.update({frozenset(ext): covi})
             covc = set.union(*[self.covc_by_arg[arg] for arg in ext])
+            self.covi_by_extension.update({frozenset(ext): covi})
             self.covc_by_extension.update({frozenset(ext): covc})
             
             if selection == 'max_covi':
@@ -271,6 +278,9 @@ class ArgTabularExplainer(object):
                 max_cov_exts = [ext]
             elif len(cov) == len(max_cov):
                 max_cov_exts.append(ext)
+            t1 = time.time()
+
+        print('Time spent on naive extensions:', t_ne, 's', '(', time.time() - t0, ')')
                 
         self.strategy['selection'] = selection
         self.strategy['inference'] = inference
@@ -282,12 +292,13 @@ class ArgTabularExplainer(object):
         elif inference == 'one':
             self.strategy['explanation_set'] = max_cov_exts[0]
         
+        self.strategy['covi'] = set.union(*[self.covi_by_extension[frozenset(ext)] for ext in max_cov_exts])
+        self.strategy['covc'] = set.union(*[self.covc_by_extension[frozenset(ext)] for ext in max_cov_exts])
+        
         if selection == 'max_covi':
-            self.strategy['covi'] = set.union(*[self.covi_by_extension[frozenset(ext)] for ext in max_cov_exts])
             print('Covi strategy\'s coverage:', len(self.strategy['covi']))
             sorted_covs = [len(cov) for cov in self.covi_by_extension.values()]
         elif selection == 'max_covc':
-            self.strategy['covc'] = set.union(*[self.covc_by_extension[frozenset(ext)] for ext in max_cov_exts])
             print('Covc strategy\'s coverage:', len(self.strategy['covc']))
             sorted_covs = [len(cov) for cov in self.covc_by_extension.values()]
         
@@ -296,7 +307,7 @@ class ArgTabularExplainer(object):
 
 
     def explain(self, i):
-        ext_ = self.strategy['explanation_set']
+        expl_set = self.strategy['explanation_set']
         cov_by_arg = None
         if self.strategy['selection'] == 'max_covi':
             cov_by_arg = self.covi_by_arg
@@ -307,8 +318,8 @@ class ArgTabularExplainer(object):
         expl = set()
         
         instance_set = set(np.where(self.X[i].toarray() != 0)[1])
-        if i in self.covi_by_extension[frozenset(ext_)]:
-            for arg in ext_:
+        if i in self.strategy['covi']:
+            for arg in expl_set:
                 if arg.issubset(instance_set):
                     expl.add(arg)
                     cov.update(cov_by_arg[arg])
@@ -321,9 +332,9 @@ class ArgTabularExplainer(object):
         return parsed_expl
 
     def display_explanations(self, slice='all'):
-        if not self.strategy:
+        if not self.strategy['selection']:
             print('Defaulting to max_covi strategy.')
-            self.set_strategy('max_covi')
+            self.set_strategy('max_covi', 'universal')
         if slice == 'all':
             slice = range(self.X.shape[0])
         else:
