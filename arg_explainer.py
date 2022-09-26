@@ -32,6 +32,8 @@ class ArgTabularExplainer(object):
                          'temp_cov': None}
         self.covi_by_extension = None
         self.covc_by_extension = None
+        self.arg_by_instance = dict()
+        self.instance_by_arg = dict()
 
         self.ibyf, self.features_p_col, self.col_p_feature = self.preprocess_structures(
             self.dataset, self.t_X, self.feature_names)
@@ -117,6 +119,9 @@ class ArgTabularExplainer(object):
                             covi_by_arg.update({frozenset(potential_arg): selection}) #covi
                             minimals[cl][n-1].add(frozenset(potential_arg))
                             covc_by_arg.update({frozenset(potential_arg): set(selection_preds)}) #covc
+                            self.arg_by_instance.update({frozenset(potential_arg): selection}) #arg by instance
+                            self.instance_by_arg.update({frozenset(selection): set(potential_arg)}) #instance by arg
+                            
             print(potential_args_checked_count, ' potential arg checked.')
             return args, minimals
 
@@ -205,7 +210,19 @@ class ArgTabularExplainer(object):
         degrees = np.sort(degs, order='degree')
         print('5 highest degrees:', degrees[-5:])
         print('5 lowest degrees:', degrees[:5])
-        
+        return self.G
+    
+    def find_undefined_instances(self): 
+        new_instances = []
+        if self.G:
+            hist = nx.degree_histogram(self.G)
+            print('degree histogram:', hist)
+            print('max degree:', max(hist))
+            max_deg_node = sorted(self.G.degree, key=lambda x: x[1], reverse=True)
+            attackers = nx.edges(max_deg_node[0])
+
+            for a in attackers:
+                continue
     
     def build_naive_extensions(self):
         """
@@ -280,7 +297,7 @@ class ArgTabularExplainer(object):
                 max_cov_exts.append(ext)
             t1 = time.time()
 
-        print('Time spent on naive extensions:', t_ne, 's', '(', time.time() - t0, ')')
+        print('Time spent on naive extensions:', t_ne, 's', '(', time.time() -  t0, ')')
                 
         self.strategy['selection'] = selection
         self.strategy['inference'] = inference
