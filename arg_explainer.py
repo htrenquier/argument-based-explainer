@@ -7,6 +7,8 @@ import numpy as np
 from sklearn.preprocessing import OneHotEncoder
 from itertools import combinations
 import time
+import io
+import os
 
 class ArgTabularExplainer(object):
     """
@@ -23,6 +25,7 @@ class ArgTabularExplainer(object):
         self.feature_names = self.oh_enc.get_feature_names_out(dataset.columns)
         self.t_X = self.X.transpose().toarray()
         self.G = None
+        self.node_dict = None # in case of extraction for 3rd party use
         ## Current strategy:
         self.strategy = {'selection' : None,
                          'inference': None,
@@ -182,7 +185,6 @@ class ArgTabularExplainer(object):
         pd.to_pickle(all_args, pp_aa)
         return all_args, R_atk
         
-
     def build_attack_graph(self, compute=False, display_graph=False):
         """
         """
@@ -212,6 +214,47 @@ class ArgTabularExplainer(object):
         print('5 lowest degrees:', degrees[:5])
         return self.G
     
+    def export_graph(self, file_type, output_path='saves'):
+
+        def graph_to_tgf(G, file_path):
+            tgf_file = file_path + '.tgf'
+            node_dict = {}
+            i_ = 0
+            with open(tgf_file, 'w') as f:
+                for n in G.nodes():
+                    i_ += 1
+                    node_dict[n] = i_
+                    f.write(str(i_)+ '\n')
+                f.write('#\n')
+                for u, v in G.edges():
+                    f.write(str(node_dict[u]) + ' ' + str(node_dict[v]) + '\n')
+                    f.write(str(node_dict[v]) + ' ' + str(node_dict[u]) + '\n')
+            return node_dict
+            
+        def graph_to_asp(G, file_path):
+            asp_file = file_path + '.asp'
+            node_dict = {}
+            i_ = 0
+            with open(asp_file, 'w') as f:
+                for n in G.nodes():
+                    i_ += 1
+                    node_dict[n] = i_
+                    f.write("arg(" + str(i_) + ").\n")
+                for u, v in G.edges():
+                    f.write("att(" + str(node_dict[u]) + ',' + str(node_dict[v]) + ').\n')
+                    f.write("att(" + str(node_dict[v]) + ',' + str(node_dict[u]) + ').\n')
+            return node_dict
+        
+        file_path = path.join(output_path, self.exp_name)
+        
+        if file_type == 'tgf':
+            return graph_to_tgf(self.G, file_path)
+        elif file_type == 'asp':
+            return graph_to_asp(self.G, file_path)
+        else:
+            print('file_type not recognized')
+            return None
+
     def find_undefined_instances(self): 
         new_instances = []
         if self.G:
@@ -224,37 +267,54 @@ class ArgTabularExplainer(object):
             for a in attackers:
                 continue
     
-    def build_naive_extensions(self):
+    def build_naive_extensions(self, method='cliques', file=None):
         """
+        method: 'cliques' : uses the networkx library to return a generator of all maximal 
+                            cliques of the complement graph of G
+                 or 'solver': uses
         """
         # Building naive extensions
         # R_atk = pd.read_pickle(path.join(self.output_path, self.exp_name + '_R_atk.df'))
 
                 # Compute naive extensions (or maximal anti-cliques: ac)
-        print(nx.density(self.G))
-        print('Number of extensions:', nx.graph_number_of_cliques(nx.complement(self.G)))
-        return nx.find_cliques(nx.complement(self.G))
-        """
-        all_args = set()
-        for cl in range(len(self.minimals)):
-            for l in range(len(self.minimals[cl])):
-                all_args.update(self.minimals[cl][l])
+        if method == 'cliques':
+            if file is not None:
+                print("No file needed for this method")
+            print("Graph density = ", nx.density(self.G))
+            print('Number of extensions: ', nx.graph_number_of_cliques(nx.complement(self.G)))
+            return nx.find_cliques(nx.complement(self.G))
+        elif method == 'solver':
+            if file is None:
+                print("No file provided")
+                return 0
+            try:
+                # pre-processing file
+                if '_preprocessed' in file:
+                    print("File already pre-processed")
+                elif os.path.isfile(file[:-4] + '_preprocessed' + file[-4:]):
+                    print("Using pre-processed file...")
+                else:
+                    with open(file, 'r') as f:
+                        print('Pre-processing file...')
+                        with open(file[:-4] + '_preprocessed' + file[-4:], 'w') as f2:
+                            for k in range(3):
+                                f.readline()
+                            for line in f.readlines():
+                                if 'Answer' not in line:
+                                    f2.write(line.strip('in(').rstrip(')\n').replace(') in(', ' '))
+                                    
+                    print('Done')
+                file = file[:-4] + '_preprocessed' + file[-4:]
+                print('Streaming ', file)
+                stream = io.open(file, mode='r', buffering=-1, encoding=None, errors=None, newline=None, closefd=True)
+                for line in stream.readlines():
+                    yield(np.array(line.split(' ')).astype(int))
+                    
+            except IOError:
+                print("IOError: file stream error")
+        else:
+            print("Method not implemented")
 
-        print(len(all_args), ' args in total.')
-
-        # Finding naive extensions can also be done by finding all maximal independent 
-        # sets: nx.maximal_independent_set(G) can output one random one.
-
-        naive_extensions = {}
-        for (h1, h2) in R_atk:
-            if h1 not in naive_extensions:
-                naive_extensions[h1] = all_args.copy()
-            if h2 not in naive_extensions:
-                naive_extensions[h2] = all_args.copy()
-            naive_extensions[h1].discard(h2)
-            naive_extensions[h2].discard(h1)
-        self.naive_extensions = naive_extensions
-        """
 
     def set_strategy(self, selection='max_covi', inference='universal'):
         # TODO: implement strategies
@@ -321,7 +381,6 @@ class ArgTabularExplainer(object):
         
         sorted_covs.sort()
         print('Top 5 covs:', sorted_covs[-5:])
-
 
     def explain(self, i):
         expl_set = self.strategy['explanation_set']
