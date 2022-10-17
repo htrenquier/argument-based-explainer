@@ -17,6 +17,7 @@ class ArgTabularExplainer(object):
     def __init__(self, model, dataset, y, exp_name, compute=False, output_path='saves') -> None:
         self.model = model
         self.dataset = dataset
+        assert len(np.unique(np.array(y))) == 2
         self.y = y
         self.exp_name = exp_name if exp_name else 'arg-exp_default_' + str(len(y))
         self.output_path = output_path
@@ -248,12 +249,11 @@ class ArgTabularExplainer(object):
         file_path = path.join(output_path, self.exp_name)
         
         if file_type == 'tgf':
-            return graph_to_tgf(self.G, file_path)
+            self.node_dict = graph_to_tgf(self.G, file_path)
         elif file_type == 'asp':
-            return graph_to_asp(self.G, file_path)
+            self.node_dict = graph_to_asp(self.G, file_path)
         else:
             print('file_type not recognized')
-            return None
 
     def find_undefined_instances(self): 
         new_instances = []
@@ -267,8 +267,97 @@ class ArgTabularExplainer(object):
             for a in attackers:
                 continue
     
+    def extension_generator(self, file=None):
+        if file is None:
+            print("Working with NetworkX to find naive extensions:")
+            print("Graph density = ", nx.density(self.G))
+            print('Number of extensions: ', nx.graph_number_of_cliques(nx.complement(self.G)))
+            return nx.find_cliques(nx.complement(self.G))
+        else:
+            assert self.node_dict is not None # No arg_map generated after graph extraction
+            arg_map = {v: k for k, v in self.node_dict.items()}
+            
+            try:
+                # pre-processing ASP answer file
+                if '_preprocessed' in file:
+                    print("File already pre-processed")
+                elif os.path.isfile(file[:-4] + '_preprocessed' + file[-4:]):
+                    print("Using pre-processed file...")
+                else:
+                    with open(file, 'r') as f:
+                        print('Pre-processing file...')
+                        with open(file[:-4] + '_preprocessed' + file[-4:], 'w') as f2:
+                            for k in range(3):
+                                f.readline()
+                            for line in f.readlines()[:-6]:
+                                if 'Answer' not in line:
+                                    f2.write(line.replace('in(', '').replace(')',''))
+                    print('Done')
+                
+                file = file[:-4] + '_preprocessed' + file[-4:]
+                print('Reading', file)
+                #stream = io.open(file, mode='r', buffering=-1, encoding=None, errors=None, newline=None, closefd=True)
+                #for line in stream.readlines():
+                with open(file, 'r') as f:
+                    for line in f.readlines():
+                        try:
+                            e_ = np.array(line.split(' ')).astype(int)
+                            yield([arg_map[e] for e in e_])
+                        except Exception as e:
+                            print("Skipped line no", c, ": ", l, e)
+                    
+            except IOError as e:
+                print("IOError: file stream error", e)
+                
+    def make_selection(self, ext_generator, alpha='max_covi'):
+        """
+        Makes a selection in all naive extensions given by the generator
+        alpha: the selection strategy
+        """
+        
+        t0 = time.time()
+        max_cov = 0
+        max_cov_exts = []
+            
+        if alpha == 'max_covi':
+            for ext in ext_generator:
+                card_cov = len(set.union(*[self.covi_by_arg[arg] for arg in ext]))
+                if card_cov > max_cov:
+                    max_cov = card_cov
+                    max_cov_exts = []
+                if card_cov >= max_cov:
+                    max_cov_exts.append(ext)
+        
+        elif strategy == 'max_covc':
+            for ext in ext_generator:
+                c += 1
+                card_cov = len(set.union(*[self.covc_by_arg[arg] for arg in ext]))
+                if card_cov > max_cov:
+                    max_cov = card_cov
+                    max_cov_exts = []
+                if card_cov >= max_cov:
+                    max_cov_exts.append(ext)
+        
+        else:
+            print('Strategy not implemented')
+        print("Time for selection: ", time.time()-t0)
+        return max_cov_exts
+            
+    def apply_inference(self, extension_set, beta='universal'):
+        """
+        beta: inference strategy
+        """
+        if beta == 'universal':
+            return set.intersection(*[set(s) for s in extension_set])
+        elif beta == 'existence':
+            return set.union(*[set(s) for s in extension_set])
+        elif beta == 'one':
+            return next(iter(extension_set))
+        
+    
     def build_naive_extensions(self, method='cliques', file=None):
         """
+        DEPRECATED
         method: 'cliques' : uses the networkx library to return a generator of all maximal 
                             cliques of the complement graph of G
                  or 'solver': uses
@@ -276,7 +365,7 @@ class ArgTabularExplainer(object):
         # Building naive extensions
         # R_atk = pd.read_pickle(path.join(self.output_path, self.exp_name + '_R_atk.df'))
 
-                # Compute naive extensions (or maximal anti-cliques: ac)
+                # Compute naive extensions (or maximal anti-cliques: ac) only works with small graphs
         if method == 'cliques':
             if file is not None:
                 print("No file needed for this method")
@@ -299,16 +388,19 @@ class ArgTabularExplainer(object):
                         with open(file[:-4] + '_preprocessed' + file[-4:], 'w') as f2:
                             for k in range(3):
                                 f.readline()
-                            for line in f.readlines():
+                            for line in f.readlines()[:-6]:
                                 if 'Answer' not in line:
-                                    f2.write(line.strip('in(').rstrip(')\n').replace(') in(', ' '))
+                                    f2.write(line.replace('in(', '').replace(')',''))
                                     
                     print('Done')
                 file = file[:-4] + '_preprocessed' + file[-4:]
                 print('Streaming ', file)
                 stream = io.open(file, mode='r', buffering=-1, encoding=None, errors=None, newline=None, closefd=True)
                 for line in stream.readlines():
-                    yield(np.array(line.split(' ')).astype(int))
+                    try:
+                        yield(np.array(line.split(' ')).astype(int))
+                    except:
+                        print("Skipped line no", c, ": ", l)
                     
             except IOError:
                 print("IOError: file stream error")
@@ -334,7 +426,7 @@ class ArgTabularExplainer(object):
         nb_ne = 0
         
         t_ne = 0
-        t0  = time.time()
+        t0 = time.time()
         t1 = time.time()
         for _ext in ne:
             t_ne += time.time() - t1
@@ -361,7 +453,7 @@ class ArgTabularExplainer(object):
                 
         self.strategy['selection'] = selection
         self.strategy['inference'] = inference
-        print('len(max_cov_exts)=',len(max_cov_exts), '/', nb_ne)
+        print('len(max_cov_exts)=', len(max_cov_exts), '/', nb_ne)
         if inference == 'universal':
             self.strategy['explanation_set'] = set.intersection(*max_cov_exts)
         elif inference == 'existence':
