@@ -315,6 +315,9 @@ class ArgTabularExplainer(object):
         alpha: the selection strategy
         """
         
+        if self.strategy['selection'] is None:
+            self.strategy['selection'] = []
+            
         t0 = time.time()
         max_cov = 0
         max_cov_exts = []
@@ -340,19 +343,36 @@ class ArgTabularExplainer(object):
         
         else:
             print('Strategy not implemented')
+            
+        self.strategy['selection'].append(alpha)
         print("Time for selection: ", time.time()-t0)
+        
+        if self.covi_by_extension is None:
+            self.covi_by_extension = dict()
+            for ext in max_cov_exts:
+                covi = set.union(*[self.covi_by_arg[arg] for arg in ext])
+                self.covi_by_extension.update({frozenset(ext): covi})
+            # TO VERIFY: strategy['covi'] should contain covi for all extensions even after multiple selections
+            self.strategy['covi'] = set.union(*[self.covi_by_extension[frozenset(ext)] for ext in max_cov_exts])
+        
         return max_cov_exts
             
     def apply_inference(self, extension_set, beta='universal'):
         """
-        beta: inference strategy
+        beta: inference strategy: 'universal', 'existence' or 'one'
         """
+        
         if beta == 'universal':
-            return set.intersection(*[set(s) for s in extension_set])
+            self.strategy['explanation_set'] = set.intersection(*[set(s) for s in extension_set])
         elif beta == 'existence':
-            return set.union(*[set(s) for s in extension_set])
+            self.strategy['explanation_set'] = set.union(*[set(s) for s in extension_set])
         elif beta == 'one':
-            return next(iter(extension_set))
+            self.strategy['explanation_set'] = set(next(iter(extension_set)))
+        else:
+            print(beta, "not Implemented")
+        
+        self.strategy['inference'] = beta
+        return self.strategy['explanation_set']
         
     
     def build_naive_extensions(self, method='cliques', file=None):
@@ -477,9 +497,9 @@ class ArgTabularExplainer(object):
     def explain(self, i):
         expl_set = self.strategy['explanation_set']
         cov_by_arg = None
-        if self.strategy['selection'] == 'max_covi':
+        if self.strategy['selection'][-1] == 'max_covi':
             cov_by_arg = self.covi_by_arg
-        elif self.strategy['selection'] == 'max_covc':
+        elif self.strategy['selection'][-1] == 'max_covc':
             cov_by_arg = self.covc_by_arg
         assert cov_by_arg
         cov = set()
@@ -503,6 +523,7 @@ class ArgTabularExplainer(object):
         if not self.strategy['selection']:
             print('Defaulting to max_covi strategy.')
             self.set_strategy('max_covi', 'universal')
+            # change to new process
         if slice == 'all':
             slice = range(self.X.shape[0])
         else:
