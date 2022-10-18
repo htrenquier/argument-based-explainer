@@ -361,7 +361,7 @@ class ArgTabularExplainer(object):
                 covi = set.union(*[self.covi_by_arg[arg] for arg in ext])
                 self.covi_by_extension.update({frozenset(ext): covi})
             # TO VERIFY: strategy['covi'] should contain covi for all extensions even after multiple selections
-            self.strategy['covi'] = set.union(*[self.covi_by_extension[frozenset(ext)] for ext in max_cov_exts])
+        self.strategy['covi'] = set.union(*[self.covi_by_extension[frozenset(ext)] for ext in max_cov_exts])
         
         return max_cov_exts
             
