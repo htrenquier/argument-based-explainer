@@ -267,12 +267,9 @@ class ArgTabularExplainer(object):
             for a in attackers:
                 continue
     
-    def extension_generator(self, file=None):
+    def extension_generator_from_sat(self, file=None):
         if file is None:
-            print("Working with NetworkX to find naive extensions:")
-            print("Graph density = ", nx.density(self.G))
-            print('Number of extensions: ', nx.graph_number_of_cliques(nx.complement(self.G)))
-            return nx.find_cliques(nx.complement(self.G))
+            print('No file given')
         else:
             assert self.node_dict is not None # No arg_map generated after graph extraction
             arg_map = {v: k for k, v in self.node_dict.items()}
@@ -298,18 +295,26 @@ class ArgTabularExplainer(object):
                 print('Reading', file)
                 #stream = io.open(file, mode='r', buffering=-1, encoding=None, errors=None, newline=None, closefd=True)
                 #for line in stream.readlines():
+                c = 0
                 with open(file, 'r') as f:
                     for line in f.readlines():
+                        c += 1
                         try:
                             e_ = np.array(line.split(' ')).astype(int)
                             yield([arg_map[e] for e in e_])
                         except Exception as e:
-                            print("Skipped line no", c, ": ", l, e)
+                            print("Skipped line no", c, ": ", line, e)
                     
             except IOError as e:
                 print("IOError: file stream error", e)
+
+    def extension_generator_from_graph(self):
+        print("Working with NetworkX to find naive extensions:")
+        print("Graph density = ", nx.density(self.G))
+        print('Number of extensions: ', nx.graph_number_of_cliques(nx.complement(self.G)))
+        return nx.find_cliques(nx.complement(self.G))
                 
-    def make_selection(self, ext_generator, alpha='max_covi'):
+    def make_selection(self, alpha='max_covi', ext_generator=None):
         """
         Makes a selection in all naive extensions given by the generator
         alpha: the selection strategy
@@ -317,7 +322,9 @@ class ArgTabularExplainer(object):
         
         if self.strategy['selection'] is None:
             self.strategy['selection'] = []
-            
+        if ext_generator is None:
+            ext_generator = self.extension_generator_from_graph()
+
         t0 = time.time()
         max_cov = 0
         max_cov_exts = []
@@ -331,7 +338,7 @@ class ArgTabularExplainer(object):
                 if card_cov >= max_cov:
                     max_cov_exts.append(ext)
         
-        elif strategy == 'max_covc':
+        elif alpha == 'max_covc':
             for ext in ext_generator:
                 c += 1
                 card_cov = len(set.union(*[self.covc_by_arg[arg] for arg in ext]))
@@ -346,7 +353,8 @@ class ArgTabularExplainer(object):
             
         self.strategy['selection'].append(alpha)
         print("Time for selection: ", time.time()-t0)
-        
+        print("Len max_cov_exts: ", len(max_cov_exts))
+
         if self.covi_by_extension is None:
             self.covi_by_extension = dict()
             for ext in max_cov_exts:
