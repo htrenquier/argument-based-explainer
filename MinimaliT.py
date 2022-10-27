@@ -58,14 +58,14 @@ class ree:
             return False
         else:
             if sum(arg):
-                if arg.pop():
+                if arg[-1]:
                     #left = self._find(arg.copy(), node.l)
                     #right = self._find(arg.copy(), node.r)
                     #return left and right
-                    return self._find(arg.copy(), node.l) \
-                        and self._find(arg.copy(), node.r)
+                    return self._find(arg[:-1], node.l) \
+                        and self._find(arg[:-1], node.r)
                 else:
-                    return self._find(arg, node.l)
+                    return self._find(arg[:-1], node.l)
             else:
                 return True
         

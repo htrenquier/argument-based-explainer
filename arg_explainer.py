@@ -119,8 +119,8 @@ class ArgTabularExplainer(object):
                 for potential_arg in combinations(np.where(row)[0], n):
                     cl = predictions[i]
                     potential_args_checked_count += 1
-                    if not is_minimal(potential_arg, cl, minimals, n-1):
-                    #if not self.mt.is_minimal(potential_arg):
+                    #if not is_minimal(potential_arg, cl, minimals, n-1):
+                    if not self.mt.is_minimal(potential_arg):
                         not_minimal_count += 1
                         continue
                     selection = set.intersection(*[set(ibyf[w]) for w in potential_arg])  # all rows with all features of potential argument
