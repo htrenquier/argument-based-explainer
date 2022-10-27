@@ -9,6 +9,7 @@ from itertools import combinations
 import time
 import io
 import os
+import MinimaliT
 
 class ArgTabularExplainer(object):
     """
@@ -25,6 +26,8 @@ class ArgTabularExplainer(object):
         self.X = self.oh_enc.fit_transform(self.dataset).todok()
         self.feature_names = self.oh_enc.get_feature_names_out(dataset.columns)
         self.t_X = self.X.transpose().toarray()
+        self.mt = MinimaliT.ree(self.X.shape[1])
+
         self.G = None
         self.node_dict = None # in case of extraction for 3rd party use
         ## Current strategy:
@@ -83,7 +86,7 @@ class ArgTabularExplainer(object):
         covi_by_arg = dict()
         covc_by_arg = dict()
 
-        def generate_args_lenN(n, ibyf, dataset, predictions, minimals=None):
+        def generate_args_lenN(n, ibyf, X_enc, predictions, minimals=None):
             """
             Generates arguments of length n, given arguments of length 1.. n-1
             :param n: length of arguments to be generated
@@ -110,15 +113,21 @@ class ArgTabularExplainer(object):
 
             args = [set(), set()]
             potential_args_checked_count = 0
-            for i, row in enumerate(dataset):
+            not_minimal_count = 0
+            arg_count = 0
+            for i, row in enumerate(X_enc):
                 for potential_arg in combinations(np.where(row)[0], n):
                     cl = predictions[i]
                     potential_args_checked_count += 1
                     if not is_minimal(potential_arg, cl, minimals, n-1):
+                    #if not self.mt.is_minimal(potential_arg):
+                        not_minimal_count += 1
                         continue
                     selection = set.intersection(*[set(ibyf[w]) for w in potential_arg])  # all rows with all features of potential argument
                     selection_preds = [predictions[i_] for i_ in selection]
                     if selection_preds[:-1] == selection_preds[1:]:
+                            arg_count += 1
+                            self.mt.add(potential_arg)
                             args[selection_preds[0]].add(frozenset(potential_arg))
                             covi_by_arg.update({frozenset(potential_arg): selection}) #covi
                             minimals[cl][n-1].add(frozenset(potential_arg))
@@ -126,20 +135,23 @@ class ArgTabularExplainer(object):
                             self.arg_by_instance.update({frozenset(potential_arg): selection}) #arg by instance
                             self.instance_by_arg.update({frozenset(selection): set(potential_arg)}) #instance by arg
                             
-            print(potential_args_checked_count, ' potential arg checked.')
+            print(potential_args_checked_count, 'potential arg checked (',
+                             not_minimal_count, 'not minimal)')
             return args, minimals
 
         print('Generating arguments')
         n = 0
         minimals = None
-        special = False
-        while not minimals or len(minimals[0][-1]) != 0 or len(minimals[1][-1]) != 0  or special:
-            special = False
+        #special = False
+        #while not minimals or len(minimals[0][-1]) != 0 or len(minimals[1][-1]) != 0  or special:
+            #special = False
+        #print(self.dataset.shape[1])
+        while not minimals or len(minimals[0]) <= self.dataset.shape[1] - 1:
             n += 1
             args, minimals = generate_args_lenN(n, instances_by_feature, X.toarray(), y, minimals)
             print("len ", n, ":", len(minimals[0][n-1]), ', ', len(minimals[1][n-1]))
-            if n==1 and ( not minimals[0][0] and not minimals[1][0]):
-                special = True
+            #if n==1 and ( not minimals[0][0] and not minimals[1][0]):
+                #special = True
         
         return minimals, covi_by_arg, covc_by_arg
 
