@@ -115,26 +115,36 @@ class ArgTabularExplainer(object):
             potential_args_checked_count = 0
             not_minimal_count = 0
             arg_count = 0
+            args_checked = set()
             for i, row in enumerate(X_enc):
-                for potential_arg in combinations(np.where(row)[0], n):
+                #for potential_arg in combinations(np.where(row)[0], n):
+                for potential_arg_enc in self.mt.potential_mins(row, n):
+                    potential_arg = np.where(potential_arg_enc)[0]
                     cl = predictions[i]
                     potential_args_checked_count += 1
-                    #if not is_minimal(potential_arg, cl, minimals, n-1):
-                    if not self.mt.is_minimal(potential_arg):
+                    #if not is_minimal(potential_arg, cl, minimals, n-1): # sol1
+                    if not self.mt.is_minimal(potential_arg_enc): # sol2
+                    #if tuple(potential_arg_enc) in args_checked: # sol3
                         not_minimal_count += 1
+                        print('Not minimal:', potential_arg)
                         continue
                     selection = set.intersection(*[set(ibyf[w]) for w in potential_arg])  # all rows with all features of potential argument
                     selection_preds = [predictions[i_] for i_ in selection]
                     if selection_preds[:-1] == selection_preds[1:]:
                             arg_count += 1
-                            self.mt.add(potential_arg)
+                            self.mt.add(potential_arg_enc)
+                            args_checked.add(tuple(potential_arg_enc))
                             args[selection_preds[0]].add(frozenset(potential_arg))
                             covi_by_arg.update({frozenset(potential_arg): selection}) #covi
                             minimals[cl][n-1].add(frozenset(potential_arg))
                             covc_by_arg.update({frozenset(potential_arg): set(selection_preds)}) #covc
                             self.arg_by_instance.update({frozenset(potential_arg): selection}) #arg by instance
                             self.instance_by_arg.update({frozenset(selection): set(potential_arg)}) #instance by arg
-                            
+            
+            #for potential_arg_enc in args_checked:
+            #    potential_arg = np.where(potential_arg_enc)[0]
+            #    self.mt.add(list(potential_arg))
+
             print(potential_args_checked_count, 'potential arg checked (',
                              not_minimal_count, 'not minimal)')
             return args, minimals
