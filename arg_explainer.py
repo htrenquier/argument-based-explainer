@@ -60,7 +60,7 @@ class ArgTabularExplainer(object):
             self.covi_by_arg = pd.read_pickle(path.join(output_path, self.exp_name + '_covibyarg.df'))
             self.covc_by_arg = pd.read_pickle(path.join(output_path, self.exp_name + '_covcbyarg.df'))
         
-        self.arguments = self.read_args(self.minimals, self.feature_names)
+        #self.arguments = self.read_args(self.minimals, self.feature_names)
         
     def preprocess_structures(self, dataset, t_X, feature_names):
         instances_by_feature = dict()
@@ -105,6 +105,25 @@ class ArgTabularExplainer(object):
                             return False
                 return True
 
+            def is_minimal_bin(potential_arg_enc, minimals):
+                # cl is class
+                #set_potential_arg = set(potential_arg)
+                for arg_c in minimals:
+                    for arg_l in arg_c:
+                        for arg in arg_l:
+                            if potential_arg_enc | arg == potential_arg_enc:
+                                return False
+                return True
+
+            def combinations_(row, l):
+                for f in combinations(np.where(row)[0], l):
+                    res = sum([2**i for i in f])
+                    print(res, f)
+                    yield res
+
+            def sum_digits(digits): 
+                return sum(c << len(digits)-i-1 for i, c in enumerate(digits)) 
+
             if minimals is None:
                 minimals = ([], [])
             assert len(minimals[0]) == n-1
@@ -118,25 +137,41 @@ class ArgTabularExplainer(object):
             args_checked = set()
             for i, row in enumerate(X_enc):
                 #for potential_arg in combinations(np.where(row)[0], n):
-                for potential_arg_enc in self.mt.potential_mins(row, n):
-                    potential_arg = np.where(potential_arg_enc)[0]
+                for potential_arg_enc in combinations_(row, n):
+                #for potential_arg_enc in self.mt.potential_mins(row, n):
+                    #potential_arg = np.where(potential_arg_enc)[0]
+
+                    if potential_arg_enc in args_checked:
+                        continue
+
+                    args_checked.add(potential_arg_enc)
+                    
+                    #if not self.mt.is_minimal(potential_arg_enc): # sol2
+                    #if tuple(potential_arg_enc) in args_checked: # sol3
+                    if not is_minimal_bin(potential_arg_enc, minimals): # sol4
+                    #if not is_minimal(potential_arg, cl, minimals, n-1): # sol1
+                        not_minimal_count += 1
+                        #print('Not minimal:', potential_arg)
+                        continue
+
                     cl = predictions[i]
                     potential_args_checked_count += 1
-                    #if not is_minimal(potential_arg, cl, minimals, n-1): # sol1
-                    if not self.mt.is_minimal(potential_arg_enc): # sol2
-                    #if tuple(potential_arg_enc) in args_checked: # sol3
-                        not_minimal_count += 1
-                        print('Not minimal:', potential_arg)
-                        continue
+                    print(bin(potential_arg_enc).lstrip('0b'))
+                    b_ = bin(potential_arg_enc).lstrip('0b')
+                    b_tab = [int(b) for b in b_]
+                    potential_arg = np.where(b_tab)[0]
+                    print('Potential arg:', b_tab, potential_arg, bin(potential_arg_enc))
                     selection = set.intersection(*[set(ibyf[w]) for w in potential_arg])  # all rows with all features of potential argument
                     selection_preds = [predictions[i_] for i_ in selection]
+
                     if selection_preds[:-1] == selection_preds[1:]:
                             arg_count += 1
-                            self.mt.add(potential_arg_enc)
-                            args_checked.add(tuple(potential_arg_enc))
+                            #self.mt.add(potential_arg_enc)
+                            #args_checked.add(tuple(potential_arg_enc))
                             args[selection_preds[0]].add(frozenset(potential_arg))
                             covi_by_arg.update({frozenset(potential_arg): selection}) #covi
-                            minimals[cl][n-1].add(frozenset(potential_arg))
+                            #minimals[cl][n-1].add(frozenset(potential_arg))
+                            minimals[cl][n-1].add(potential_arg_enc)
                             covc_by_arg.update({frozenset(potential_arg): set(selection_preds)}) #covc
                             self.arg_by_instance.update({frozenset(potential_arg): selection}) #arg by instance
                             self.instance_by_arg.update({frozenset(selection): set(potential_arg)}) #instance by arg
