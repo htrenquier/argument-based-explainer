@@ -9,7 +9,7 @@ from itertools import combinations
 import time
 import io
 import os
-import MinimaliT
+import matplotlib.pyplot as plt
 
 class ArgTabularExplainer(object):
     """
@@ -26,7 +26,6 @@ class ArgTabularExplainer(object):
         self.X = self.oh_enc.fit_transform(self.dataset).todok()
         self.feature_names = self.oh_enc.get_feature_names_out(dataset.columns)
         self.t_X = self.X.transpose().toarray()
-        self.mt = MinimaliT.ree(self.X.shape[1])
 
         self.G = None
         self.node_dict = None # in case of extraction for 3rd party use
@@ -60,7 +59,7 @@ class ArgTabularExplainer(object):
             self.covi_by_arg = pd.read_pickle(path.join(output_path, self.exp_name + '_covibyarg.df'))
             self.covc_by_arg = pd.read_pickle(path.join(output_path, self.exp_name + '_covcbyarg.df'))
         
-        #self.arguments = self.read_args(self.minimals, self.feature_names)
+        self.arguments = self.read_args(self.minimals, self.feature_names)
         
     def preprocess_structures(self, dataset, t_X, feature_names):
         instances_by_feature = dict()
@@ -95,40 +94,16 @@ class ArgTabularExplainer(object):
             :param minimals: arguments (minimal)
             :return:
             """
-
             def is_minimal(potential_arg, cl, minimals, n):
                 # cl is class
-                set_potential_arg = set(potential_arg)
                 for k in range(n):
                     for comb_ in combinations(potential_arg, k+1):
-                        if frozenset(comb_) in minimals[cl][k]:
+                        if frozenset(comb_) in minimals[cl]:
                             return False
                 return True
 
-            def is_minimal_bin(potential_arg_enc, minimals):
-                # cl is class
-                #set_potential_arg = set(potential_arg)
-                for arg_c in minimals:
-                    for arg_l in arg_c:
-                        for arg in arg_l:
-                            if potential_arg_enc | arg == potential_arg_enc:
-                                return False
-                return True
-
-            def combinations_(row, l):
-                for f in combinations(np.where(row)[0], l):
-                    res = sum([2**i for i in f])
-                    print(res, f)
-                    yield res
-
-            def sum_digits(digits): 
-                return sum(c << len(digits)-i-1 for i, c in enumerate(digits)) 
-
-            if minimals is None:
-                minimals = ([], [])
-            assert len(minimals[0]) == n-1
-            minimals[0].append(set())
-            minimals[1].append(set())
+            if minimals is None: # ONLY FOR 2 CLASSES
+                minimals = (set(), set())
 
             args = [set(), set()]
             potential_args_checked_count = 0
@@ -136,75 +111,52 @@ class ArgTabularExplainer(object):
             arg_count = 0
             args_checked = set()
             for i, row in enumerate(X_enc):
-                #for potential_arg in combinations(np.where(row)[0], n):
-                for potential_arg_enc in combinations_(row, n):
-                #for potential_arg_enc in self.mt.potential_mins(row, n):
-                    #potential_arg = np.where(potential_arg_enc)[0]
-
-                    if potential_arg_enc in args_checked:
+                for potential_arg in combinations(np.nonzero(row)[0], n):
+                    if potential_arg in args_checked:
                         continue
 
-                    args_checked.add(potential_arg_enc)
-                    
+                    args_checked.add(potential_arg)
+                    cl = predictions[i]
+
                     #if not self.mt.is_minimal(potential_arg_enc): # sol2
                     #if tuple(potential_arg_enc) in args_checked: # sol3
-                    if not is_minimal_bin(potential_arg_enc, minimals): # sol4
+                    #if not is_minimal_bin(potential_arg_enc, minimals): # sol4
                     #if not is_minimal(potential_arg, cl, minimals, n-1): # sol1
+                    if not is_minimal(potential_arg, cl, minimals, n-1): # sol5
                         not_minimal_count += 1
                         #print('Not minimal:', potential_arg)
                         continue
 
-                    cl = predictions[i]
                     potential_args_checked_count += 1
-                    print(bin(potential_arg_enc).lstrip('0b'))
-                    b_ = bin(potential_arg_enc).lstrip('0b')
-                    b_tab = [int(b) for b in b_]
-                    potential_arg = np.where(b_tab)[0]
-                    print('Potential arg:', b_tab, potential_arg, bin(potential_arg_enc))
+                    
                     selection = set.intersection(*[set(ibyf[w]) for w in potential_arg])  # all rows with all features of potential argument
                     selection_preds = [predictions[i_] for i_ in selection]
 
                     if selection_preds[:-1] == selection_preds[1:]:
                             arg_count += 1
-                            #self.mt.add(potential_arg_enc)
-                            #args_checked.add(tuple(potential_arg_enc))
                             args[selection_preds[0]].add(frozenset(potential_arg))
                             covi_by_arg.update({frozenset(potential_arg): selection}) #covi
-                            #minimals[cl][n-1].add(frozenset(potential_arg))
-                            minimals[cl][n-1].add(potential_arg_enc)
+                            minimals[cl].add(frozenset(potential_arg))
                             covc_by_arg.update({frozenset(potential_arg): set(selection_preds)}) #covc
                             self.arg_by_instance.update({frozenset(potential_arg): selection}) #arg by instance
                             self.instance_by_arg.update({frozenset(selection): set(potential_arg)}) #instance by arg
             
-            #for potential_arg_enc in args_checked:
-            #    potential_arg = np.where(potential_arg_enc)[0]
-            #    self.mt.add(list(potential_arg))
-
+            print("len ", n, ":", len(args[0]), ', ', len(args[1]))
             print(potential_args_checked_count, 'potential arg checked (',
                              not_minimal_count, 'not minimal)')
             return args, minimals
 
         print('Generating arguments')
-        n = 0
         minimals = None
-        #special = False
-        #while not minimals or len(minimals[0][-1]) != 0 or len(minimals[1][-1]) != 0  or special:
-            #special = False
-        #print(self.dataset.shape[1])
-        while not minimals or len(minimals[0]) <= self.dataset.shape[1] - 1:
-            n += 1
+        for n in range(1, self.dataset.shape[1] + 1):
             args, minimals = generate_args_lenN(n, instances_by_feature, X.toarray(), y, minimals)
-            print("len ", n, ":", len(minimals[0][n-1]), ', ', len(minimals[1][n-1]))
-            #if n==1 and ( not minimals[0][0] and not minimals[1][0]):
-                #special = True
-        
+
         return minimals, covi_by_arg, covc_by_arg
 
     def read_args(self, minimals, feature_names):
         arguments = [[], []]
         for cl in range(len(minimals)):
-            for a in range(len(minimals[cl])):
-                for f in minimals[cl][a]:
+                for f in minimals[cl]:
                     arguments[cl].append(tuple([feature_names[k] for k in f]))
         return arguments
 
@@ -218,7 +170,7 @@ class ArgTabularExplainer(object):
         R_atk = []
         all_args = []
         for cl in range(2):
-            all_args.append(list(set.union(*list(minimals[cl]))))
+            all_args.append(list(minimals[cl]))
         print(len(all_args[0]), len(all_args[1]), " args total")
         for a1 in all_args[0]:
             for a2 in all_args[1]:
@@ -259,19 +211,55 @@ class ArgTabularExplainer(object):
             R_atk = pd.read_pickle(path.join(self.output_path, self.exp_name + '_R_atk.df'))
             #all_args = pd.read_pickle(path.join(self.output_path, self.exp_name + '_all_args.df'))
             self.G = pd.read_pickle(pp_aG)
-        print('len(R_atk) = ', len(R_atk))
-        
+
         if display_graph:
             nx.draw(self.G, with_labels=False)
             nx.drawing.nx_pydot.write_dot(self.G,path.join(self.output_path, self.exp_name + "G_atk_fig.dot"))
-            plt.savefig(path.join(self.output_path, self.exp_name  +"G_atk_fig.png"))
+            plt.savefig(path.join(self.output_path, self.exp_name  + "G_atk_fig.png"))
+        
+        return self.G
+    
+    def af_analysis(self):
+        aG_files = [f for f in os.listdir(self.output_path)\
+            if path.isfile(path.join(self.output_path, f))\
+                and f.endswith('atk_graph.df')\
+                and f.startswith(self.exp_name.split('_')[0])]
+        R_atk_files = [f for f in os.listdir(self.output_path)\
+            if path.isfile(path.join(self.output_path, f))\
+                and f.endswith('R_atk.df')\
+                and f.startswith(self.exp_name.split('_')[0])]
+        
+        print(aG_files, R_atk_files)
+
+        list_R_atk = []
+        list_degs = []
+        for f in R_atk_files:
+            list_R_atk.append(len(pd.read_pickle(path.join(self.output_path, f))))
+
+        print(list_R_atk)
+
+        for f in aG_files:
+            G_ = pd.read_pickle(path.join(self.output_path, f))
+            degs = [d for n, d in G_.degree()]
+            #degs = np.array(list(G_.degree()), dtype = [('node', 'object'), ('degree', int)])
+            list_degs.append(degs)
+
+
+        fig = plt.figure(figsize =(10, 7))
+        ax = fig.add_axes([0, 0, 1, 1])
+        plt.boxplot(list_degs)
+        plt.show()
+
+        return
+        R_atk = pd.read_pickle(pp_Ratk)
+        self.G = pd.read_pickle(pp_aG)
+        print('len(R_atk) = ', len(R_atk))
         
         degs = np.array(list(self.G.degree()), dtype = [('node', 'object'), ('degree', int)])
         degrees = np.sort(degs, order='degree')
         print('5 highest degrees:', degrees[-5:])
         print('5 lowest degrees:', degrees[:5])
-        return self.G
-    
+
     def export_graph(self, file_type, output_path='saves'):
 
         def graph_to_tgf(G, file_path):
