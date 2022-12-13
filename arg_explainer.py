@@ -5,7 +5,7 @@ import networkx as nx
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import OneHotEncoder
-from itertools import combinations
+from itertools import combinations, product
 import time
 import io
 import os
@@ -112,6 +112,7 @@ class ArgTabularExplainer(object):
             args_checked = set()
             for i, row in enumerate(X_enc):
                 for potential_arg in combinations(np.nonzero(row)[0], n):
+                    #potential_arg = sorted(potential_arg)
                     if potential_arg in args_checked:
                         continue
 
@@ -161,9 +162,17 @@ class ArgTabularExplainer(object):
         return arguments
 
     def consistent(self, arg1, arg2):
-        for f1, f2 in zip(list(arg1), list(arg2)):
-            if f1 != f2 and self.col_p_feature[f1] == self.col_p_feature[f2]:
+        # pre condition: arg1 and arg2 are subsets of a possible instance
+        #print('consistency check: ', arg1, arg2)
+        u = sorted(list(set.union(set(arg1), set(arg2))))
+        for k in range(len(u)-1):
+            if self.col_p_feature[u[k]] == self.col_p_feature[u[k+1]]:
+                #print('false', u, k, self.col_p_feature[u[k]], self.col_p_feature[u[k+1]], self.col_p_feature)
                 return False
+        # for f1, f2 in zip(list(arg1), list(arg2)):
+        #     print(f1, f2, self.col_p_feature[f1], self.col_p_feature[f2])
+        #     if f1 != f2 and self.col_p_feature[f1] == self.col_p_feature[f2]:
+        #         return False
         return True
 
     def build_r_atk(self, minimals):
@@ -171,23 +180,11 @@ class ArgTabularExplainer(object):
         all_args = []
         for cl in range(2):
             all_args.append(list(minimals[cl]))
-        print(len(all_args[0]), len(all_args[1]), " args total")
-        for a1 in all_args[0]:
-            for a2 in all_args[1]:
-                if self.consistent(a1,a2):
-                    R_atk.append((a1,a2))
-        """
-        for cl in range(2):
-            nb_added = 0
-            for l in range(len(minimals[cl])):
-                for h1 in minimals[cl][l]:
-                    for l2 in range(l-1):
-                        for h2 in minimals[1-cl][l2]:
-                            if self.consistent(h1, h2):
-                                R_atk.append((h1, h2))
-                                nb_added += 1
-            print(nb_added, " attacks added")
-        """
+
+        for a1, a2 in product(minimals[0], minimals[1]):
+            if self.consistent(a1,a2):
+                R_atk.append((a1,a2))
+
         print(self.exp_name)
         pp_atk = path.join(self.output_path, self.exp_name + '_R_atk.df')
         pp_aa = path.join(self.output_path, self.exp_name + '_all_args.df')
