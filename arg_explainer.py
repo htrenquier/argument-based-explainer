@@ -216,7 +216,7 @@ class ArgTabularExplainer(object):
         
         return self.G
     
-    def af_analysis(self):
+    def af_analysis(self, remove=[]):
         aG_files = [f for f in os.listdir(self.output_path)\
             if path.isfile(path.join(self.output_path, f))\
                 and f.endswith('atk_graph.df')\
@@ -225,26 +225,79 @@ class ArgTabularExplainer(object):
             if path.isfile(path.join(self.output_path, f))\
                 and f.endswith('R_atk.df')\
                 and f.startswith(self.exp_name.split('_')[0])]
+        minimals_files = [f for f in os.listdir(self.output_path)\
+            if path.isfile(path.join(self.output_path, f))\
+                and f.endswith('minimals.df')\
+                and f.startswith(self.exp_name.split('_')[0])]
         
-        print(aG_files, R_atk_files)
+        file_groups = [aG_files, R_atk_files, minimals_files]
+        cleans = [[]] * len(file_groups)
+        
+        def remove_file_by_kw(file_group, remove):
+            cleans = []
+            for f in file_group:
+                clean = True
+                for kw in remove:
+                    if kw in f:
+                        clean = False
+                        break
+                if clean:
+                    cleans.append(f)
+            return cleans
 
+        aG_files = remove_file_by_kw(aG_files, remove)
+        R_atk_files = remove_file_by_kw(R_atk_files, remove)
+        minimals_files = remove_file_by_kw(minimals_files, remove)
+        
         list_R_atk = []
         list_degs = []
         for f in R_atk_files:
             list_R_atk.append(len(pd.read_pickle(path.join(self.output_path, f))))
-
         print(list_R_atk)
 
+        nargs_list = []
+        ninst_list = []
+        list_coherences = []
         for f in aG_files:
             G_ = pd.read_pickle(path.join(self.output_path, f))
+            ninst_list.append(int(f.split("_")[1]))
+            nargs_list.append(len(G_.nodes()))
             degs = [d for n, d in G_.degree()]
-            #degs = np.array(list(G_.degree()), dtype = [('node', 'object'), ('degree', int)])
             list_degs.append(degs)
+            list_coherences.append(1 - (np.count_nonzero(degs)/len(degs)))
 
+        ninst_list_sorted, nargs_list_sorted = zip(*sorted(zip(ninst_list, nargs_list)))
+        print(ninst_list_sorted, nargs_list_sorted)
+        plt.plot(ninst_list_sorted, nargs_list_sorted)
+        plt.xlabel("# instances")
+        plt.ylabel("# arguments")
+        plt.show()
+
+        for f in minimals_files:
+            minimals = pd.read_pickle(path.join(self.output_path, f))
+            arg_lengths = [0] * (len(self.dataset.columns) + 1)
+            for arg in minimals[0]:
+                arg_lengths[len(arg)] += 1
+            for arg in minimals[1]:
+                arg_lengths[len(arg)] += 1
+            plt.plot(arg_lengths, label = f.split("_")[1] + " instances")
+            
+        plt.xlabel("arguments' length")
+        plt.ylabel("# arguments")
+        plt.legend()
+        plt.show()
 
         fig = plt.figure(figsize =(10, 7))
         ax = fig.add_axes([0, 0, 1, 1])
-        plt.boxplot(list_degs)
+        ax.boxplot(list_degs)
+        plt.show()
+
+        list_coherences_sorted, ninst_list_sorted = zip(*sorted(zip(ninst_list, list_coherences), reverse=True))
+        print(list_coherences_sorted, ninst_list_sorted)
+
+        plt.plot(list_coherences_sorted, ninst_list_sorted)
+        plt.xlabel("# instances")
+        plt.ylabel("% coherent arguments")
         plt.show()
 
         return
