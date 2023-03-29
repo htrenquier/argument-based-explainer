@@ -12,20 +12,16 @@ import os
 import matplotlib.pyplot as plt
 
 class ArgTabularExplainer(object):
+    # TODO: separate init and compute
     """
 
     """
-    def __init__(self, model, dataset, y, exp_name, compute=False, output_path='saves') -> None:
-        self.model = model
-        self.dataset = dataset
-        assert len(np.unique(np.array(y))) == 2
-        self.y = y
-        self.exp_name = exp_name if exp_name else 'arg-exp_default_' + str(len(y))
+    def __init__(self, dataset_manager, exp_name, compute=False, output_path='saves', verbose=True) -> None:
+        self.dm = dataset_manager
+        self.verbose = verbose
+
+        self.exp_name = exp_name if exp_name else 'arg-exp_default_' + str(len(self.dm.nb_classes))
         self.output_path = output_path
-        self.oh_enc = OneHotEncoder(handle_unknown='ignore', sparse=True)
-        self.X = self.oh_enc.fit_transform(self.dataset).todok()
-        self.feature_names = self.oh_enc.get_feature_names_out(dataset.columns)
-        self.t_X = self.X.transpose().toarray()
 
         self.G = None
         self.node_dict = None # in case of extraction for 3rd party use
@@ -41,11 +37,9 @@ class ArgTabularExplainer(object):
         self.arg_by_instance = dict()
         self.instance_by_arg = dict()
 
-        self.ibyf, self.features_p_col, self.col_p_feature = self.preprocess_structures(
-            self.dataset, self.t_X, self.feature_names)
-
+        print(self.exp_name)
         if compute:
-            self.minimals, self.covi_by_arg, self.covc_by_arg = self.generate_args(self.ibyf, self.X, self.y)
+            self.minimals, self.covi_by_arg, self.covc_by_arg = self.generate_args(self.dm.ibyfv, self.dm.X, self.dm.predictions)
             ## Save
             pp = path.join(output_path, self.exp_name + '_minimals.df')
             print('Saving to ', pp)
@@ -59,24 +53,8 @@ class ArgTabularExplainer(object):
             self.covi_by_arg = pd.read_pickle(path.join(output_path, self.exp_name + '_covibyarg.df'))
             self.covc_by_arg = pd.read_pickle(path.join(output_path, self.exp_name + '_covcbyarg.df'))
         
-        self.arguments = self.read_args(self.minimals, self.feature_names)
+        self.arguments = self.read_args(self.minimals, self.dm.feature_value_names)
         
-    def preprocess_structures(self, dataset, t_X, feature_names):
-        instances_by_feature = dict()
-        for i, col in enumerate(t_X):
-            instances_by_feature.update({i: list(np.where(col)[0])})
-        
-        features_p_col = {}
-        col_p_feature = {}
-
-        for col in dataset.columns:
-            features_p_col[col] = set()
-            for i, f in enumerate(feature_names):
-                if col in f:
-                    features_p_col[col].add(i)
-                    col_p_feature[i] = col
-
-        return instances_by_feature, features_p_col, col_p_feature
 
     def generate_args(self, instances_by_feature, X, y):
         """
@@ -85,11 +63,11 @@ class ArgTabularExplainer(object):
         covi_by_arg = dict()
         covc_by_arg = dict()
 
-        def generate_args_lenN(n, ibyf, X_enc, predictions, minimals=None):
+        def generate_args_lenN(n, ibyfv, X_enc, predictions, minimals=None):
             """
             Generates arguments of length n, given arguments of length 1.. n-1
             :param n: length of arguments to be generated
-            :param ibyf: instances_by_feature
+            :param ibyfv: instances_by_feature_value 
             :param predictions:
             :param minimals: arguments (minimal)
             :return:
@@ -119,18 +97,13 @@ class ArgTabularExplainer(object):
                     args_checked.add(potential_arg)
                     cl = predictions[i]
 
-                    #if not self.mt.is_minimal(potential_arg_enc): # sol2
-                    #if tuple(potential_arg_enc) in args_checked: # sol3
-                    #if not is_minimal_bin(potential_arg_enc, minimals): # sol4
-                    #if not is_minimal(potential_arg, cl, minimals, n-1): # sol1
-                    if not is_minimal(potential_arg, cl, minimals, n-1): # sol5
+                    if not is_minimal(potential_arg, cl, minimals, n-1):
                         not_minimal_count += 1
-                        #print('Not minimal:', potential_arg)
                         continue
 
                     potential_args_checked_count += 1
                     
-                    selection = set.intersection(*[set(ibyf[w]) for w in potential_arg])  # all rows with all features of potential argument
+                    selection = set.intersection(*[set(ibyfv[w]) for w in potential_arg])  # all rows with all features of potential argument
                     selection_preds = [predictions[i_] for i_ in selection]
 
                     if selection_preds[:-1] == selection_preds[1:]:
@@ -142,38 +115,40 @@ class ArgTabularExplainer(object):
                             self.arg_by_instance.update({frozenset(potential_arg): selection}) #arg by instance
                             self.instance_by_arg.update({frozenset(selection): set(potential_arg)}) #instance by arg
             
-            print("len ", n, ":", len(args[0]), ', ', len(args[1]))
-            print(potential_args_checked_count, 'potential arg checked (',
-                             not_minimal_count, 'not minimal)')
+            if self.verbose:
+                print("len ", n, ":", len(args[0]), ', ', len(args[1]))
+                print(potential_args_checked_count, 'potential arg checked (',
+                                not_minimal_count, 'not minimal)')
             return args, minimals
 
-        print('Generating arguments')
+        if self.verbose:
+            print('Generating arguments')
         minimals = None
-        for n in range(1, self.dataset.shape[1] + 1):
+        for n in range(1, len(self.dm.feature_names) + 1):
             args, minimals = generate_args_lenN(n, instances_by_feature, X.toarray(), y, minimals)
 
+        print('Total number of arguments: ', len(minimals[0]) + len(minimals[1]))
         return minimals, covi_by_arg, covc_by_arg
 
-    def read_args(self, minimals, feature_names):
+    def read_args(self, minimals, feature_value_names):
         arguments = [[], []]
         for cl in range(len(minimals)):
                 for f in minimals[cl]:
-                    arguments[cl].append(tuple([feature_names[k] for k in f]))
+                    arguments[cl].append(tuple([feature_value_names[k] for k in f]))
         return arguments
 
+
     def consistent(self, arg1, arg2):
-        # pre condition: arg1 and arg2 are subsets of a possible instance
-        #print('consistency check: ', arg1, arg2)
+        """
+          Pre condition: arg1 and arg2 are subsets of a possible instance
+          returns True if arg1 and arg2 are consistent
+        """
         u = sorted(list(set.union(set(arg1), set(arg2))))
         for k in range(len(u)-1):
-            if self.col_p_feature[u[k]] == self.col_p_feature[u[k+1]]:
-                #print('false', u, k, self.col_p_feature[u[k]], self.col_p_feature[u[k+1]], self.col_p_feature)
+            if self.dm.feature_p_value[u[k]] == self.dm.feature_p_value[u[k+1]]:
                 return False
-        # for f1, f2 in zip(list(arg1), list(arg2)):
-        #     print(f1, f2, self.col_p_feature[f1], self.col_p_feature[f2])
-        #     if f1 != f2 and self.col_p_feature[f1] == self.col_p_feature[f2]:
-        #         return False
         return True
+
 
     def build_r_atk(self, minimals):
         R_atk = []
@@ -185,7 +160,6 @@ class ArgTabularExplainer(object):
             if self.consistent(a1,a2):
                 R_atk.append((a1,a2))
 
-        print(self.exp_name)
         pp_atk = path.join(self.output_path, self.exp_name + '_R_atk.df')
         pp_aa = path.join(self.output_path, self.exp_name + '_all_args.df')
         pd.to_pickle(R_atk, pp_atk)
@@ -267,7 +241,8 @@ class ArgTabularExplainer(object):
             list_coherences.append(1 - (np.count_nonzero(degs)/len(degs)))
 
         ninst_list_sorted, nargs_list_sorted = zip(*sorted(zip(ninst_list, nargs_list)))
-        print(ninst_list_sorted, nargs_list_sorted)
+        print(ninst_list_sorted)
+        print(nargs_list_sorted)
         plt.plot(ninst_list_sorted, nargs_list_sorted)
         plt.xlabel("# instances")
         plt.ylabel("# arguments")
@@ -275,7 +250,7 @@ class ArgTabularExplainer(object):
 
         for f in minimals_files:
             minimals = pd.read_pickle(path.join(self.output_path, f))
-            arg_lengths = [0] * (len(self.dataset.columns) + 1)
+            arg_lengths = [0] * (len(self.dm.feature_names) + 1)
             for arg in minimals[0]:
                 arg_lengths[len(arg)] += 1
             for arg in minimals[1]:
@@ -350,17 +325,17 @@ class ArgTabularExplainer(object):
         else:
             print('file_type not recognized')
 
-    def find_undefined_instances(self): 
-        new_instances = []
-        if self.G:
-            hist = nx.degree_histogram(self.G)
-            print('degree histogram:', hist)
-            print('max degree:', max(hist))
-            max_deg_node = sorted(self.G.degree, key=lambda x: x[1], reverse=True)
-            attackers = nx.edges(max_deg_node[0])
+    # def find_undefined_instances(self): 
+    #     new_instances = []
+    #     if self.G:
+    #         hist = nx.degree_histogram(self.G)
+    #         print('degree histogram:', hist)
+    #         print('max degree:', max(hist))
+    #         max_deg_node = sorted(self.G.degree, key=lambda x: x[1], reverse=True)
+    #         attackers = nx.edges(max_deg_node[0])
 
-            for a in attackers:
-                continue
+    #         for a in attackers:
+    #             continue
     
     def extension_generator_from_sat(self, file=None):
         if file is None:
@@ -567,71 +542,72 @@ class ArgTabularExplainer(object):
             print("Method not implemented")
 
 
-    def set_strategy(self, selection='max_covi', inference='universal'):
-        # TODO: implement strategies
-        """
-        Returns the extension to be used for explanations.
-        """
+    # def set_strategy(self, selection='max_covi', inference='universal'):
+    #     # TODO: implement strategies
+    #     """
+    #     DEPRECATED
+    #     Returns the extension to be used for explanations.
+    #     """
        
-        self.covi_by_extension = dict()
-        self.covc_by_extension = dict()
-        covi = set()
-        covc = set()
-        max_cov = set()
-        max_cov_exts = None
-        # Reset naive_extensions generator
-        ne = self.build_naive_extensions()
-        assert ne
-        nb_ne = 0
+    #     self.covi_by_extension = dict()
+    #     self.covc_by_extension = dict()
+    #     covi = set()
+    #     covc = set()
+    #     max_cov = set()
+    #     max_cov_exts = None
+    #     # Reset naive_extensions generator
+    #     ne = self.build_naive_extensions()
+    #     assert ne
+    #     nb_ne = 0
         
-        t_ne = 0
-        t0 = time.time()
-        t1 = time.time()
-        for _ext in ne:
-            t_ne += time.time() - t1
-            nb_ne += 1
-            ext = set(_ext)
-            covi = set.union(*[self.covi_by_arg[arg] for arg in ext])
-            covc = set.union(*[self.covc_by_arg[arg] for arg in ext])
-            self.covi_by_extension.update({frozenset(ext): covi})
-            self.covc_by_extension.update({frozenset(ext): covc})
+    #     t_ne = 0
+    #     t0 = time.time()
+    #     t1 = time.time()
+    #     for _ext in ne:
+    #         t_ne += time.time() - t1
+    #         nb_ne += 1
+    #         ext = set(_ext)
+    #         covi = set.union(*[self.covi_by_arg[arg] for arg in ext])
+    #         covc = set.union(*[self.covc_by_arg[arg] for arg in ext])
+    #         self.covi_by_extension.update({frozenset(ext): covi})
+    #         self.covc_by_extension.update({frozenset(ext): covc})
             
-            if selection == 'max_covi':
-                cov = covi
-            elif selection == 'max_covc':
-                cov = covc
+    #         if selection == 'max_covi':
+    #             cov = covi
+    #         elif selection == 'max_covc':
+    #             cov = covc
             
-            if len(cov) > len(max_cov):
-                max_cov = cov
-                max_cov_exts = [ext]
-            elif len(cov) == len(max_cov):
-                max_cov_exts.append(ext)
-            t1 = time.time()
+    #         if len(cov) > len(max_cov):
+    #             max_cov = cov
+    #             max_cov_exts = [ext]
+    #         elif len(cov) == len(max_cov):
+    #             max_cov_exts.append(ext)
+    #         t1 = time.time()
 
-        print('Time spent on naive extensions:', t_ne, 's', '(', time.time() -  t0, ')')
+    #     print('Time spent on naive extensions:', t_ne, 's', '(', time.time() -  t0, ')')
                 
-        self.strategy['selection'] = selection
-        self.strategy['inference'] = inference
-        print('len(max_cov_exts)=', len(max_cov_exts), '/', nb_ne)
-        if inference == 'universal':
-            self.strategy['explanation_set'] = set.intersection(*max_cov_exts)
-        elif inference == 'existence':
-            self.strategy['explanation_set'] = set.union(*max_cov_exts)
-        elif inference == 'one':
-            self.strategy['explanation_set'] = max_cov_exts[0]
+    #     self.strategy['selection'] = selection
+    #     self.strategy['inference'] = inference
+    #     print('len(max_cov_exts)=', len(max_cov_exts), '/', nb_ne)
+    #     if inference == 'universal':
+    #         self.strategy['explanation_set'] = set.intersection(*max_cov_exts)
+    #     elif inference == 'existence':
+    #         self.strategy['explanation_set'] = set.union(*max_cov_exts)
+    #     elif inference == 'one':
+    #         self.strategy['explanation_set'] = max_cov_exts[0]
         
-        self.strategy['covi'] = set.union(*[self.covi_by_extension[frozenset(ext)] for ext in max_cov_exts])
-        self.strategy['covc'] = set.union(*[self.covc_by_extension[frozenset(ext)] for ext in max_cov_exts])
+    #     self.strategy['covi'] = set.union(*[self.covi_by_extension[frozenset(ext)] for ext in max_cov_exts])
+    #     self.strategy['covc'] = set.union(*[self.covc_by_extension[frozenset(ext)] for ext in max_cov_exts])
         
-        if selection == 'max_covi':
-            print('Covi strategy\'s coverage:', len(self.strategy['covi']))
-            sorted_covs = [len(cov) for cov in self.covi_by_extension.values()]
-        elif selection == 'max_covc':
-            print('Covc strategy\'s coverage:', len(self.strategy['covc']))
-            sorted_covs = [len(cov) for cov in self.covc_by_extension.values()]
+    #     if selection == 'max_covi':
+    #         print('Covi strategy\'s coverage:', len(self.strategy['covi']))
+    #         sorted_covs = [len(cov) for cov in self.covi_by_extension.values()]
+    #     elif selection == 'max_covc':
+    #         print('Covc strategy\'s coverage:', len(self.strategy['covc']))
+    #         sorted_covs = [len(cov) for cov in self.covc_by_extension.values()]
         
-        sorted_covs.sort()
-        print('Top 5 covs:', sorted_covs[-5:])
+    #     sorted_covs.sort()
+    #     print('Top 5 covs:', sorted_covs[-5:])
 
     def explain(self, i):
         expl_set = self.strategy['explanation_set']
@@ -653,11 +629,11 @@ class ArgTabularExplainer(object):
                     cov.update(cov_by_arg[arg])
         return expl, cov
 
-    def parse_features(self, explanation):
-        parsed_expl = set()
-        for arg in explanation:
-            parsed_expl.add(frozenset([self.feature_names[k] for k in arg]))
-        return parsed_expl
+    # def parse_features(self, explanation):
+    #     parsed_expl = set()
+    #     for arg in explanation:
+    #         parsed_expl.add(frozenset([self.feature_names[k] for k in arg]))
+    #     return parsed_expl
 
     def display_explanations(self, slice='all', verbose=True):
         if not self.strategy['selection']:
