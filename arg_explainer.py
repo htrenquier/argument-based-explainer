@@ -10,6 +10,10 @@ import time
 import io
 import os
 import matplotlib.pyplot as plt
+import multiprocessing as mp
+from multiprocessing.pool import ThreadPool as Pool
+# from multiprocessing import Pool
+
 
 class ArgTabularExplainer(object):
     # TODO: separate init and compute
@@ -56,6 +60,138 @@ class ArgTabularExplainer(object):
         self.arguments = self.read_args(self.minimals, self.dm.feature_value_names)
         
 
+    def target(self, i, row, args_checked, minimals, ibyfv, predictions, n):
+        
+        def is_minimal(potential_arg, cl, minimals, n):
+            # cl is class
+            for k in range(n):
+                for comb_ in combinations(potential_arg, k+1):
+                    if frozenset(comb_) in minimals[cl]:
+                        return False
+            return True
+        
+        arg_batch = list()
+        for potential_arg in combinations(np.nonzero(row)[0], n):
+            if potential_arg in args_checked:
+                continue
+            args_checked.append(potential_arg)
+            cl = predictions[i]
+
+            if not is_minimal(potential_arg, cl, minimals, n-1):
+                continue
+            
+            selection = set.intersection(*[ibyfv[w] for w in potential_arg])  # all rows with all features of potential argument
+            selection_preds = [predictions[i_] for i_ in selection]
+            if selection_preds[:-1] == selection_preds[1:]:
+                arg_batch.append((frozenset(potential_arg), selection, selection_preds))
+        return arg_batch
+
+    
+
+    def generate_args_lenN_mp(self, n, ibyfv, X_enc, predictions, minimals, covi_by_arg, covc_by_arg, verbose):
+        """
+        Generates arguments of length n, given arguments of length 1.. n-1
+        :param n: length of arguments to be generated
+        :param ibyfv: instances_by_feature_value 
+        :param predictions:
+        :param minimals: arguments (minimal)
+        :return:
+        """
+        
+        args = [set(), set()]
+        minimals_count = 0
+        not_minimal_count = 0
+
+        mp_results = []
+        manager = mp.Manager()
+        args_checked = manager.list()
+
+        with Pool(mp.cpu_count()) as pool:
+            for i, row in enumerate(X_enc):
+                mp_results.append(pool.apply_async(self.target,\
+                                    args=(i, row, args_checked, minimals, ibyfv, predictions, n)))
+            pool.close()
+            pool.join()
+
+        for res in mp_results:
+            for arg in res.get():
+                minimals_count += 1
+                (potential_arg, selection, selection_preds) = arg
+                if selection_preds[:-1] == selection_preds[1:]:
+                    cl = selection_preds[0]
+                    args[cl].add(potential_arg)
+                    minimals[cl].add(potential_arg)
+                    covi_by_arg.update({potential_arg: selection}) #covi
+                    covc_by_arg.update({potential_arg: set(selection_preds)}) #covc
+                    self.arg_by_instance.update({potential_arg: selection}) #arg by instance
+                    self.instance_by_arg.update({frozenset(selection): set(potential_arg)}) #instance by arg
+            else:
+                not_minimal_count += 1
+
+        if verbose:
+            print("len ", n, ":", len(args[0]), ', ', len(args[1]))
+            print(minimals_count, 'potential arg checked (',
+                            not_minimal_count, 'not minimal) - mp')
+        return args, minimals
+        
+                
+    def generate_args_lenN(self, n, ibyfv, X_enc, predictions, minimals, covi_by_arg, covc_by_arg, verbose):
+        """
+        Generates arguments of length n, given arguments of length 1.. n-1
+        :param n: length of arguments to be generated
+        :param ibyfv: instances_by_feature_value 
+        :param predictions:
+        :param minimals: arguments (minimal)
+        :return:
+        """
+        def is_minimal(potential_arg, cl, minimals, n):
+            # cl is class
+            for k in range(n):
+                for comb_ in combinations(potential_arg, k+1):
+                    if frozenset(comb_) in minimals[cl]:
+                        return False
+            return True
+
+        args = [set(), set()]
+        minimals_count = 0
+        not_minimal_count = 0
+        arg_count = 0
+        args_checked = set()
+
+        for i, row in enumerate(X_enc):
+            for potential_arg in combinations(np.nonzero(row)[0], n):
+                #potential_arg = sorted(potential_arg)
+                if potential_arg in args_checked:
+                    continue
+
+                args_checked.add(potential_arg)
+                cl = predictions[i]
+                
+                if not is_minimal(potential_arg, cl, minimals, n-1):
+                    not_minimal_count += 1
+                    continue
+
+                minimals_count += 1
+                
+                selection = set.intersection(*[ibyfv[w] for w in potential_arg])  # all rows with all features of potential argument
+                selection_preds = [predictions[i_] for i_ in selection]
+
+                if selection_preds[:-1] == selection_preds[1:]:
+                        arg_count += 1
+                        args[selection_preds[0]].add(frozenset(potential_arg))
+                        covi_by_arg.update({frozenset(potential_arg): selection}) #covi
+                        minimals[cl].add(frozenset(potential_arg))
+                        covc_by_arg.update({frozenset(potential_arg): set(selection_preds)}) #covc
+                        self.arg_by_instance.update({frozenset(potential_arg): selection}) #arg by instance
+                        self.instance_by_arg.update({frozenset(selection): set(potential_arg)}) #instance by arg
+
+
+        if verbose:
+            print("len ", n, ":", len(args[0]), ', ', len(args[1]))
+            print(minimals_count, 'potential arg checked (',
+                            not_minimal_count, 'not minimal)')
+        return args, minimals
+
     def generate_args(self, instances_by_feature, X, y):
         """
         """
@@ -63,72 +199,16 @@ class ArgTabularExplainer(object):
         covi_by_arg = dict()
         covc_by_arg = dict()
 
-        def generate_args_lenN(n, ibyfv, X_enc, predictions, minimals=None):
-            """
-            Generates arguments of length n, given arguments of length 1.. n-1
-            :param n: length of arguments to be generated
-            :param ibyfv: instances_by_feature_value 
-            :param predictions:
-            :param minimals: arguments (minimal)
-            :return:
-            """
-            def is_minimal(potential_arg, cl, minimals, n):
-                # cl is class
-                for k in range(n):
-                    for comb_ in combinations(potential_arg, k+1):
-                        if frozenset(comb_) in minimals[cl]:
-                            return False
-                return True
-
-            if minimals is None: # ONLY FOR 2 CLASSES
-                minimals = (set(), set())
-
-            args = [set(), set()]
-            potential_args_checked_count = 0
-            not_minimal_count = 0
-            arg_count = 0
-            args_checked = set()
-            for i, row in enumerate(X_enc):
-                for potential_arg in combinations(np.nonzero(row)[0], n):
-                    #potential_arg = sorted(potential_arg)
-                    if potential_arg in args_checked:
-                        continue
-
-                    args_checked.add(potential_arg)
-                    cl = predictions[i]
-
-                    if not is_minimal(potential_arg, cl, minimals, n-1):
-                        not_minimal_count += 1
-                        continue
-
-                    potential_args_checked_count += 1
-                    
-                    selection = set.intersection(*[set(ibyfv[w]) for w in potential_arg])  # all rows with all features of potential argument
-                    selection_preds = [predictions[i_] for i_ in selection]
-
-                    if selection_preds[:-1] == selection_preds[1:]:
-                            arg_count += 1
-                            args[selection_preds[0]].add(frozenset(potential_arg))
-                            covi_by_arg.update({frozenset(potential_arg): selection}) #covi
-                            minimals[cl].add(frozenset(potential_arg))
-                            covc_by_arg.update({frozenset(potential_arg): set(selection_preds)}) #covc
-                            self.arg_by_instance.update({frozenset(potential_arg): selection}) #arg by instance
-                            self.instance_by_arg.update({frozenset(selection): set(potential_arg)}) #instance by arg
-            
-            if self.verbose:
-                print("len ", n, ":", len(args[0]), ', ', len(args[1]))
-                print(potential_args_checked_count, 'potential arg checked (',
-                                not_minimal_count, 'not minimal)')
-            return args, minimals
+        minimals = (set(), set())
 
         if self.verbose:
             print('Generating arguments')
-        minimals = None
         for n in range(1, len(self.dm.feature_names) + 1):
-            args, minimals = generate_args_lenN(n, instances_by_feature, X.toarray(), y, minimals)
+            args, minimals = self.generate_args_lenN_mp(n, instances_by_feature, X.toarray(), y, minimals, covi_by_arg, covc_by_arg, self.verbose)
 
         print('Total number of arguments: ', len(minimals[0]) + len(minimals[1]))
         return minimals, covi_by_arg, covc_by_arg
+    
 
     def read_args(self, minimals, feature_value_names):
         arguments = [[], []]
@@ -230,22 +310,40 @@ class ArgTabularExplainer(object):
         print(list_R_atk)
 
         nargs_list = []
+        natk_list = []
         ninst_list = []
         list_coherences = []
         for f in aG_files:
             G_ = pd.read_pickle(path.join(self.output_path, f))
             ninst_list.append(int(f.split("_")[1]))
             nargs_list.append(len(G_.nodes()))
+            natk_list.append(len(G_.edges()))
             degs = [d for n, d in G_.degree()]
             list_degs.append(degs)
             list_coherences.append(1 - (np.count_nonzero(degs)/len(degs)))
 
         ninst_list_sorted, nargs_list_sorted = zip(*sorted(zip(ninst_list, nargs_list)))
-        print(ninst_list_sorted)
-        print(nargs_list_sorted)
+        print('ninst:', ninst_list_sorted)
+        print('nargs:',nargs_list_sorted)
         plt.plot(ninst_list_sorted, nargs_list_sorted)
         plt.xlabel("# instances")
         plt.ylabel("# arguments")
+        plt.show()
+
+        ninst_list_sorted, natk_list_sorted = zip(*sorted(zip(ninst_list, natk_list)))
+        print('ninst:', ninst_list_sorted)
+        print('natk:', natk_list_sorted)
+        plt.plot(ninst_list_sorted, natk_list_sorted)
+        plt.xlabel("# instances")
+        plt.ylabel("# attacks")
+        plt.show()
+
+        nargs_list_sorted, natk_list_sorted = zip(*sorted(zip(nargs_list, natk_list)))
+        print('nargs:', nargs_list_sorted)
+        print('ninst:', natk_list_sorted)
+        plt.plot(nargs_list_sorted, natk_list_sorted)
+        plt.xlabel("# arguments")
+        plt.ylabel("# attacks")
         plt.show()
 
         for f in minimals_files:

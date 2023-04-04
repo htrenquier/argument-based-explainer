@@ -16,9 +16,10 @@ class Testbench(object):
     Tool functions to test the arg_explainer class and data-based setups.
     """
 
-    def __init__(self, data_manager) -> None:
+    def __init__(self, data_manager, exp_name=None) -> None:
         self.dm = data_manager
         self.classifier = self.dm.get_classifier()
+        self.exp_name = exp_name
         pass
 
     def explore_full_dataset(self, nb_steps):
@@ -33,8 +34,8 @@ class Testbench(object):
 
         for nb_rows in utils.make_slices(self.dm.space_size(), nb_steps):
 
-            self.dm.set_raw_dataset(full_dataset_shuff[:nb_rows])
-            explainer = ae.ArgTabularExplainer(self.dm, 'titanic_' + str(nb_rows) + '_synthfull', compute=True, output_path='../../saves')
+            self.dm.use_synth_dataset(full_dataset_shuff, nb_rows)
+            explainer = ae.ArgTabularExplainer(self.dm, self.exp_name + '_' + str(nb_rows) + '_fullsynth', compute=True, output_path='../../saves')
 
             G = explainer.build_attack_graph(compute=True, display_graph=False)
             print('total args:', len(G.nodes()))
@@ -80,7 +81,7 @@ class Testbench(object):
             
             print('nbh dataset :', nbh_dataset_shuff[0])
             self.dm.use_synth_dataset(nbh_dataset_shuff, nb_rows)
-            explainer = ae.ArgTabularExplainer(self.dm, 'titanic_' + str(nb_rows) + '_synthnbh', compute=True, output_path='../../saves')
+            explainer = ae.ArgTabularExplainer(self.dm, self.exp_name + '_' + str(nb_rows) + '_synthnbh', compute=True, output_path='../../saves')
 
             G = explainer.build_attack_graph(compute=True, display_graph=False)
             print('total args:', len(G.nodes()))

@@ -83,7 +83,7 @@ class DatasetManager(object):
         # values in fit only are concerned NOOOO  
         self.ibyfv = dict() # instances per feature value
         for i, col in enumerate(self.X.transpose().toarray()):
-            self.ibyfv.update({i: list(np.where(col)[0])})
+            self.ibyfv.update({i: set(np.where(col)[0])})
         
         self.values_p_feature = {}  # values per feature
         self.feature_p_value = {}   # feature per feature value
@@ -114,8 +114,10 @@ class DatasetManager(object):
         # returns the number of possible instances
         return np.product([len(values) for values in self.values_p_feature.values()])
 
+
     def get_nb_rows(self):
         return self.nb_rows
+    
     
     def generate_full_dataset(self):
         # TODO: make yield version
