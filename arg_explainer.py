@@ -11,8 +11,7 @@ import io
 import os
 import matplotlib.pyplot as plt
 import multiprocessing as mp
-from multiprocessing.pool import ThreadPool as Pool
-# from multiprocessing import Pool
+import utils
 
 
 class ArgTabularExplainer(object):
@@ -60,7 +59,7 @@ class ArgTabularExplainer(object):
         self.arguments = self.read_args(self.minimals, self.dm.feature_value_names)
         
 
-    def target(self, i, row, args_checked, minimals, ibyfv, predictions, n):
+    def target(self, X_enc, offset, minimals, ibyfv, predictions, n):
         
         def is_minimal(potential_arg, cl, minimals, n):
             # cl is class
@@ -71,19 +70,21 @@ class ArgTabularExplainer(object):
             return True
         
         arg_batch = list()
-        for potential_arg in combinations(np.nonzero(row)[0], n):
-            if potential_arg in args_checked:
-                continue
-            args_checked.append(potential_arg)
-            cl = predictions[i]
+        args_checked = set()
+        for i, row in enumerate(X_enc):
+            for potential_arg in combinations(np.nonzero(row)[0], n):
+                if potential_arg in args_checked:
+                    continue
+                args_checked.add(potential_arg)
+                cl = predictions[i + offset]
 
-            if not is_minimal(potential_arg, cl, minimals, n-1):
-                continue
-            
-            selection = set.intersection(*[ibyfv[w] for w in potential_arg])  # all rows with all features of potential argument
-            selection_preds = [predictions[i_] for i_ in selection]
-            if selection_preds[:-1] == selection_preds[1:]:
-                arg_batch.append((frozenset(potential_arg), selection, selection_preds))
+                if not is_minimal(potential_arg, cl, minimals, n-1):
+                    continue
+                
+                selection = set.intersection(*[ibyfv[w] for w in potential_arg])  # all rows with all features of potential argument
+                selection_preds = [predictions[i_] for i_ in selection]
+                if selection_preds[:-1] == selection_preds[1:]:
+                    arg_batch.append((frozenset(potential_arg), selection, selection_preds))
         return arg_batch
 
     
@@ -103,13 +104,15 @@ class ArgTabularExplainer(object):
         not_minimal_count = 0
 
         mp_results = []
-        manager = mp.Manager()
-        args_checked = manager.list()
+        # manager = mp.Manager()
+        # args_checked = manager.list()
 
-        with Pool(mp.cpu_count()) as pool:
-            for i, row in enumerate(X_enc):
+        with mp.Pool(mp.cpu_count()) as pool:
+            steps = utils.make_slices(len(X_enc), mp.cpu_count(), zero=True)
+            for i in range(len(steps)-1):
+                sl_ = slice(steps[i], steps[i+1])
                 mp_results.append(pool.apply_async(self.target,\
-                                    args=(i, row, args_checked, minimals, ibyfv, predictions, n)))
+                                    args=(X_enc[sl_], steps[i], minimals, ibyfv, predictions, n)))
             pool.close()
             pool.join()
 
@@ -125,8 +128,8 @@ class ArgTabularExplainer(object):
                     covc_by_arg.update({potential_arg: set(selection_preds)}) #covc
                     self.arg_by_instance.update({potential_arg: selection}) #arg by instance
                     self.instance_by_arg.update({frozenset(selection): set(potential_arg)}) #instance by arg
-            else:
-                not_minimal_count += 1
+                else:
+                    not_minimal_count += 1
 
         if verbose:
             print("len ", n, ":", len(args[0]), ', ', len(args[1]))

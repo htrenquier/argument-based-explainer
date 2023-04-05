@@ -8,9 +8,12 @@ def remove_duplicates(list_):
         print('duplicates', len(list_)-len(new_list))
         return new_list
 
-def make_slices(nb_data, nb_slices):
+def make_slices(nb_data, nb_slices, zero=False):
     slice_len = nb_data//nb_slices
-    slices = [i*slice_len for i in range(1, nb_slices)]
+    if zero:
+        slices = [i*slice_len for i in range(nb_slices)]
+    else:
+        slices = [i*slice_len for i in range(1, nb_slices)]
     slices.append(nb_data)
     return slices
 
