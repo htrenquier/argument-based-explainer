@@ -207,7 +207,7 @@ class ArgTabularExplainer(object):
         if self.verbose:
             print('Generating arguments')
         for n in range(1, len(self.dm.feature_names) + 1):
-            args, minimals = self.generate_args_lenN_mp(n, instances_by_feature, X.toarray(), y, minimals, covi_by_arg, covc_by_arg, self.verbose)
+            args, minimals = self.generate_args_lenN(n, instances_by_feature, X.toarray(), y, minimals, covi_by_arg, covc_by_arg, self.verbose)
 
         print('Total number of arguments: ', len(minimals[0]) + len(minimals[1]))
         return minimals, covi_by_arg, covc_by_arg
